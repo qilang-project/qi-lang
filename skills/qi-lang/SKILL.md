@@ -3,14 +3,26 @@ name: qi-lang
 description: Write, understand, and debug Qi (奇语) programming language code — a compiled language with 100% Chinese keywords, LLVM native backend, ARC memory management, and first-class LLM primitives (询问::<T> structured output, 尝试询问, 异步询问, 工具模式/工具适配 signature-as-tool, 流式 streaming iteration, 嵌入/相似度 embeddings, LLM tape record/replay). True coroutines are on by default (未来<T>+等待 → multi-core M:N LLVM coroutines, 启动/通道/选择). Use when the user writes .qi files, fixes Qi compile errors, uses the Qi standard library (HTTP, JSON, 数学, 哈希表, 图形化 egui GUI, 大模型 etc.), asks about 否则如果 chains, 且/或/非 logical keywords, 模板"..." string interpolation, 区间循环 (0 直到 n half-open / 0 到 n closed), 新建 struct literals, 特性 traits, generics/turbofish, arity overloading, goroutines/channels/futures, qi.toml packages, qi test, or cross-compilation.
 metadata:
   author: qilang
-  version: "2.0"
+  version: "2.1"
 ---
 
 # Qi 语言 (奇语)
 
-Qi（奇语）是一门 100% 中文关键字的编译型语言，经 LLVM（inkwell 后端，LLVM 21）编译为原生可执行文件。当前版本 **2026.07.12-1**，安装：`brew tap qilang-project/qi https://github.com/qilang-project/homebrew-qi && brew install qi`（布局 `/usr/local/bin/qi` + `/usr/local/lib/qi/` 运行时，解压即用）。内存管理为 ARC（自动引用计数，默认开启）。
+Qi（奇语）是一门 100% 中文关键字的编译型语言，经 LLVM（inkwell 后端，LLVM 21）编译为原生可执行文件。内存管理为 ARC（自动引用计数，默认开启）。
 
-> 相关技能：`qi-web`（Web 框架）、`qi-cli`（命令行框架）、`qi-harness`（LLM Agent 框架）—— 均为 Qi 写的第三方包，用它们时先读对应技能。
+当前版本 **2026.08.16-3**。三平台四产物：macOS arm64 / Linux x64 / Linux arm64 / **Windows x64**。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/qilang-project/qi/main/scripts/install.sh | bash
+brew tap qilang-project/qi https://github.com/qilang-project/homebrew-qi && brew install qi   # macOS 备选
+```
+
+装完是 `/usr/local/bin/qi` + `/usr/local/lib/qi/`（运行时归档 + 头文件），解压即用。
+不想装：**https://play.qilang.org** 在浏览器里跑（沙箱跟发布版走，不跟主干）。
+第三方包在 **https://pkg.qilang.org**（`qi get` 从这儿拉）。
+
+> 相关技能：`qi-web`（Web 框架 + LiveView）、`qi-cli`（命令行框架）、`qi-harness`（LLM Agent 框架）
+> —— 均为 Qi 写的第三方包，用它们时先读对应技能。
 
 ## 何时使用此技能
 
@@ -89,7 +101,33 @@ LLM 调用是**语言级原语**，不是库。会话先建（无隐式默认，
 
 「返回 `未来<T>` 且含 `等待`」的函数编译成 LLVM coroutine，多核 M:N 调度（worker = CPU 核数，`QI_CORO_WORKERS` 覆盖；`QI_CORO=0` 退 eager）。门控函数级——普通程序 IR 逐字节不变。协程内通道有 park-wake 背压 + 死锁检测（全挂起报错不 hang）；`等待 让出()` 显式让出、`执行器运行全部()` 统一推进。微基准 vs Go：上下文切换 2.6 倍胜、通道/创建/扇入胜，纯 CPU 密集暂负（优化档位）。`启动 函数(…)` goroutine、`通道<T>`（整数/字符串/浮点数/布尔）、`选择{情况…}` 见 [references/并发异步.md](references/并发异步.md)。
 
-## 高频坑清单（全部实证，2026.07.12-1）
+## 2026-08 新增的几块（旧文档里没有）
+
+**数据库**（`标准库.数据库`）—— 一套 API 三个后端：`连接(DSN)` 认 `postgres://` /
+`mysql://` / sqlite 文件路径；`后端(库)` 回报方言，SQL 里的方言差异得自己分支。
+`查询`(回 JSON 字符串) / `执行` / `查询参数` / `执行参数`(参数是 JSON 数组) /
+`事务开始|提交|回滚` / `最后插入id`。连接池内置。
+SQLite 要只读打开就用 URI：`file:/路径/x.db?mode=ro` —— **写会返回 -1，是 SQLite 层的保证**，
+对着别人的生产库读数时用它，比"我只写了 SELECT"可靠。
+
+**Redis**（`标准库.Redis`）—— 键值 / 发布订阅；qi-web 的会话和跨进程广播走它。
+
+**gRPC**（`标准库.gRPC` + qilang-project/qi-grpc）—— 真 HTTP/2 + protobuf + trailers，
+grpcurl / Go / Java 客户端直连。一元 + 流式 + TLS + gzip + 反射。
+**流式是拉取式**：qi 函数当值传给 FFI 必崩，所以没有"注册回调"式 API。
+
+**FFI 互通三件套**（见工具链参考）：
+- `外部 函数` 声明 C 函数；**C 回调**可以把 qi 函数传给 `qsort` 这类 C API（四类不合法情形在编译期就拒）
+- 链接控制：`--库路径` / 直链 `.a` `.so` / macOS `-framework`
+- `-g` 出 DWARF，lldb 能断点、单步、看中文变量名
+- `C整数` 是独立类型（32 位），别拿 `整数`(i64) 直接接 C 的 `int` 返回值 —— 会截断
+
+**容器化** —— `qi/docker/` 有多阶段模板；运行层只要三个 .so，distroless 镜像 66MB，
+arm64 从 2026.08.12-1 起有。
+
+**qi-widgets** —— 组件库（三主题 / 基础控件 / 表单 / 游戏框架，278 个测试），GUI 程序别从零搭。
+
+## 高频坑清单（全部实证，2026.08.16-3）
 
 1. **结构体字面量唯一写法 `新建 类型{…}`**——旧括号包裹 `(点{x:1})` **已删，解析错误**（返回值位置同理 `返回 新建 点{…};`）。
 2. **else-if 是干净的 `} 否则如果 条件 {`**——旧双写 `否则如果 如果` 现在是解析错误；链尾 否则 可选。
@@ -98,17 +136,47 @@ LLM 调用是**语言级原语**，不是库。会话先建（无隐式默认，
 5. **特性三件套可用**：`特性`（可带默认方法，体内 `自己.抽象方法()`）/ `实现 特性 对于 类型` / 约束 `<T: 特性>`；特性可作参数类型（动态派发）。**按元数重载**可用（同名不同参数个数；返回类型须一致，不能配默认参数/变参）。
 6. **枚举**：`枚举 形状 { 圆(浮点数), 点 }` 构造 `形状.圆(3.14)`、匹配解构可配守卫、穷尽性编译期强制。内建 选项/结果 用裸构造子 `有/无/成/败`。变体名不能用保留字。
 7. **匹配 只能作语句**不能作表达式；支持字面量/守卫/`_`/变量绑定；不支持或模式 `|`。`选择` 支持 `默认`/`超时(毫秒)`（Go 冒号语法）。
-8. **保留字地雷**（不能作变量/函数名）：`结果 类型 尝试 继续 返回 到 直到 数组 列表 选择 选项 新建 空 真 假 且 通道 未来 特性 默认 匹配` 等——报错会提示换名（`数组`→`数列`）。`长度`/`模板`/`循环`/`加减乘除等于` 可用（词形运算符 2026-08 已删，运算只有符号形）。全集 60 词见语法参考。
+8. **保留字**共 **64 个**，事实源是 `grammar.lalrpop` 的字面量终结符（`keywords.rs` 只是诊断表，有一致性测试挡漂移）。全集：
+
+   ```
+   与 且 作为 假 公开 函数 列表 到 包 匹配 变量 否则 启动 在 外部 如果 字符
+   字符串 字节 实现 对于 导入 导出 尝试 布尔 常量 库名 异步 弱 当 情况 或
+   抛出 指针 捕获 数组 整数 新建 最终 未来 枚举 模块 浮点数 特性 直到 真 空
+   等待 类型 结构体 结果 继续 自己 自身 超时 跳出 返回 选择 选项 通道 长度
+   闭包 非 默认
+   ```
+
+   踩得最多的：`类型`（**能作结构体字段名，不能作参数名**）、`模块`、`到`、`结果`、`列表`、`启动`。
+   报错会提示换名（`数组`→`数列`）。`长度` 虽在表里但**可以**当变量名（实测通过）。
+   `模板` / `循环` / 词形运算符不是保留字（词形运算符 2026-08 已删，运算只有符号形）。
 9. **`打印行` 逗号多参逐参各占一行**（并发下还会交错）。永远 `+` 拼成单串再打印。
 10. **同一函数里两个循环慎复用同名字符串局部变量**——曾触发 RC 释放路径 bug（拿到已释放值；简单形态实测已不复现，但复杂拼接场景稳妥起见换名或提到循环外）。全局数组/全局 RC 变量泄漏已修（main 出口统一释放，`QI_RC_REPORT=1` 实测活跃对象=0）。
 11. **模块别名后字符串返回类型会丢失**：`导入 标准库.输入输出 作为 IO;` 后赋值要加 `: 字符串` 标注，否则打印出指针数字。
 12. **无注解竖线闭包返回类型默认 空**——写返回注解或用 `闭包(x: 整数): 整数 {}`。闭包存进变量后必须作为函数参数传递才能调。
 13. **浮点数组字面量元素必须写 `1.0`**：`[1,2,3]` 推成整数数组，传 `向量.*`/`数学.*` 是垃圾。
-14. **`文本.子串` 按字节索引**，切在多字节字符中间直接 panic（中文 3 字节/字）。
+14. **`字符串::子串` 按字节索引**，切在多字节字符中间直接 panic（中文 3 字节/字）。
+    按字符切用 `字符串::字符子串` / `字符串::字符数量`。（旧名 `文本.子串` 仍可用，
+    两个模块名都指同一套实现；新代码写 `字符串`。）
 15. **GUI 程序需要 gui feature 运行时**：`cd qi-runtime && cargo build --release --features gui`；默认构建是桩版（`应用创建` 返回 0 报「GUI 库未安装」），不带 feature 重建会覆盖回桩版。
-16. **qi-web 发二进制静态文件发不出**（UTF-8 字符串管道，图片会坏）——base64 内联或外部静态服务，详见 qi-web 技能。
-17. **端口规范**：示例严禁 8080/3000/8000，用 3000 以上随机高位如 `6759`、`43719`、`46271`。
-18. 同目录同包的无导入文件会被**自动并入编译**；含 `导入` 的文件必须显式 `导入 ./文件名;`。跨包只支持 destructure：`导入 Web::{创建应用, …}`。
+16. **qi-web 静态目录要给绝对路径**。给相对路径时「文件存在」那一关会过（它按进程 CWD 找），
+    到 sendfile 才被拒（那层只认 `/` 或 `C:\` 开头），浏览器拿到 `500 invalid sendfile path`
+    而文件明明就在那儿。用 `系统.当前目录() + "/static"`。
+    （**旧文档说"二进制静态文件发不出、要 base64 内联"—— 那条已经过时**：
+    `发送文件`/`下载文件`/静态中间件现在都走 `X-Qi-Sendfile` 标记头由 Rust 字节直发，
+    实测 4104 字节 PNG 取回 md5 与原文件一致。别再为图片写 base64 内联。）
+17. **`字符串::分割` 返回的是列表句柄（整数），不是 `数组<字符串>`**。
+    用 `列表库::字符串列表大小(h)` + `列表库::获取字符串(h, i)` 读。
+    写成 `变量 行: 数组<字符串> = 字符串::分割(…)` 会被类型检查器拦下。
+18. **环境变量名必须 ASCII**。`QICANG_元库` 这种 shell 根本 export 不了（zsh 报
+    "not valid in this context"），而 `获取环境变量` 只会安静地拿到空串。**值**可以是中文。
+    同理 shell 变量名、URL 路径、CSS 类名、HTML 属性名、JS 标识符一律英文 —— 中文只写在 .qi 里。
+19. **端口规范**：示例严禁 8080/3000/8000，用 3000 以上随机高位如 `6759`、`43719`、`46271`。
+20. 同目录同包的无导入文件会被**自动并入编译**；含 `导入` 的文件必须显式 `导入 ./文件名;`。跨包只支持 destructure：`导入 Web::{创建应用, …}`。
+21. **改了库却没生效？先查依赖解析**：导入会从当前文件逐级向上扫每一级的**所有子目录**找
+    `qi.toml` 里同名的包，且**排在 `QI_PACKAGES_PATH` 之前**。祖先目录里任何一份残留副本都会
+    静默盖掉你指定的依赖（匹配看包名，跟目录名无关，改名成 `xxx.disabled` 没用）。
+    所以**试验代码别放 `/tmp`** —— 那等于让编译器扫整个 `/tmp`。
+    决定性验证：把真源文件故意写坏，还能编译过就说明读的不是它。
 
 ## 深入阅读路由
 
@@ -116,7 +184,7 @@ LLM 调用是**语言级原语**，不是库。会话先建（无隐式默认，
 |---|---|
 | 类型/控制流(否则如果/且或非)/函数(默认参数/变参/重载)/结构体与方法/特性/泛型/闭包/异常/字符串(模板插值)/数组/保留字 | [references/语法参考.md](references/语法参考.md) |
 | LLM 原语全家：询问::<T>/尝试询问/异步询问/工具模式/流式/嵌入/填充模板/预算/磁带 | [references/大模型.md](references/大模型.md) |
-| 标准库各模块 API（输入输出/文本/JSON/HTTP/数学/哈希表/图形化 GUI/子进程…）与返回值约定 | [references/标准库.md](references/标准库.md) |
+| 标准库各模块 API（输入输出/字符串/JSON/HTTP/数据库/Redis/gRPC/数学/哈希表/图形化 GUI/子进程…）与返回值约定 | [references/标准库.md](references/标准库.md) |
 | 启动(goroutine)/通道/未来<T>与等待/让出/选择/协程异常/同步原语/QI_CORO | [references/并发异步.md](references/并发异步.md) |
 | CLI 命令与中文别名/-O 优化/交叉编译(Linux/龙芯)/qi test/qifmt/qi doctor/FFI/ARC 环境变量 | [references/工具链.md](references/工具链.md) |
 | qi.toml 依赖三种写法/qi get 与缓存/qi.lock/导入解析顺序/多文件项目组织 | [references/包管理.md](references/包管理.md) |

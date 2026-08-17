@@ -1,0 +1,20 @@
+{
+  "name": "qilang",
+  "owner": {
+    "name": "qilang-project",
+    "url": "https://github.com/qilang-project"
+  },
+  "metadata": {
+    "description": "Skills for Qi (奇语) — the 100% Chinese-keyword compiled language, its web / CLI / LLM-agent frameworks",
+    "version": "2.1.0"
+  },
+  "plugins": [
+    {
+      "name": "qilang",
+      "source": "./",
+      "description": "Write, understand and debug Qi (奇语) code: language core with LLM primitives and true coroutines, plus the qi-web (HTTP + LiveView), qi-cli and qi-harness (LLM agents) frameworks.",
+      "category": "languages",
+      "tags": ["qi", "qilang", "奇语", "chinese", "llvm", "web", "cli", "llm", "agent"]
+    }
+  ]
+}

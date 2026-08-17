@@ -1,51 +1,52 @@
-# qi-lang
+# Qi 语言的 AI agent 技能
 
-**奇语（Qi）** 编程语言的 AI agent skill 定义 —— 教 AI 编码助手准确编写、理解、调试 Qi 代码。
+教 AI 编码助手怎么写 [Qi（奇语）](https://qilang.org) —— 一门 100% 中文关键字的编译型语言。
 
-> 奇语是一门 100% 中文关键字、编译到原生机器码（LLVM 21）的编程语言。官网：https://qilang-project.github.io/
+四个技能，装一次全都有：
 
-## 这是什么
+| 技能 | 管什么 |
+|---|---|
+| **qi-lang** | 语言本身：语法、类型、特性/泛型、ARC、真协程、**语言级 LLM 原语**（`询问::<T>` 结构化输出、流式、嵌入、磁带）、标准库、工具链、包管理 |
+| **qi-web** | HTTP 框架 + **LiveView**（服务端渲染 + DOM morph 局部 patch + 客户端 hook） |
+| **qi-cli** | Cobra 风格命令行框架 |
+| **qi-harness** | LLM Agent 框架：agent loop、工具派发、图控制流与断点续跑、评估、追踪、MCP |
 
-瘦 `SKILL.md` + 按需加载的参考文件，对应语言 2026.07.05-1 版，**所有代码示例均在真实编译器上验证通过**：
+## 装
+
+**Claude Code**（推荐，能升级能卸载）：
 
 ```
-qi-lang/
-├── SKILL.md              # 触发面 + 程序结构速查 + 高频坑清单（14 条实测坑）+ 参考文件路由表
-└── references/
-    ├── 语法参考.md        # 类型/控制流/函数(默认参数/变参)/结构体与方法/闭包/异常/字符串/数组/保留字
-    ├── 标准库.md          # 按模块组织的核心 API + FFI 返回值约定表
-    ├── 并发异步.md        # 启动(goroutine)/通道/未来<T>与等待/协程异常队列/同步原语
-    ├── 工具链.md          # CLI 双语命令/-O 优化/Linux 交叉编译/qi test/qifmt/ARC 内存管理
-    └── 包管理.md          # qi.toml 依赖三种写法/qi get 与缓存/导入解析顺序/多文件项目组织
+/plugin marketplace add qilang-project/qi-lang
+/plugin install qilang@qilang
 ```
 
-覆盖的语言现状（2026.07 起的重大能力）：
-
-- **ARC 自动引用计数**默认开启（字符串/结构体/数组/闭包环境），`QI_ARC=0` 调试开关、`QI_RC_REPORT=1` 泄漏检测
-- **异常机制**完整可用：尝试/捕获/最终/抛出，goroutine 异常入队查询，future 出错经 等待 传播
-- **包管理**：qi.toml 清单 + `qi get` 远程依赖 + qi.lock 锁定，编译期零联网
-- **交叉编译**：macOS 一条命令出 Linux ELF（x86_64/aarch64，zig 链接）
-- 变参函数、默认参数、`对于 x 在 数组` 遍历、`qi test` 测试发现
-- 以及大量"能解析但 codegen 无效"的陷阱清单（匹配/选择/跳出/继续/f-string/数组下标赋值…）
-
-## 怎么用
-
-作为 agent skill 安装（任意支持 skills 的 AI 编码工具）：
+**Codex**，或任何读 `~/.codex/skills` / `~/.claude/skills` 的工具：
 
 ```bash
-npx skills add https://github.com/qilang-project/qi-lang
+git clone https://github.com/qilang-project/qi-lang.git
+cd qi-lang && ./install.sh
 ```
 
-或手动把整个目录（`SKILL.md` + `references/`）放进你的 agent skills 目录。
+脚本把 `skills/` 下每个目录软链过去（不是拷贝），所以之后 `git pull` 一下技能就更新了。
+也可以指定目录：`./install.sh ~/某处/skills`。
 
-## 配套技能
+**手动**：把 `skills/qi-lang`、`skills/qi-web`、`skills/qi-cli`、`skills/qi-harness`
+四个目录复制到你的助手读技能的位置即可 —— 就是普通的 `SKILL.md` + `references/`，没有别的机关。
 
-| 技能 | 用途 |
-|---|---|
-| **qi-lang**（本仓库） | 语言本体 + 标准库 + 工具链 |
-| [qi-web](https://github.com/qilang-project/qi-web) | Web 框架 |
-| [qi-cli](https://github.com/qilang-project/qi-cli) | 命令行框架 |
-| [qi-harness](https://github.com/qilang-project/qi-harness) | LLM Agent 框架 |
+## 它们是怎么维护的
+
+技能里的每条断言都对着**当前发布版**验过，不是照着记忆写的。带 ⚠️ 的坑基本都是
+真踩过一次才写进去的，所以过时的条目会被明确划掉而不是留在那儿 —— 比如
+「二进制静态文件发不出、要 base64 内联」那条曾经是真的，2026-08 改成 sendfile
+字节直发之后就作废了，文档里现在写的是它作废了。
+
+当前对齐版本：**qi 2026.08.16-3**。
+
+## 不装也能试
+
+- 浏览器里跑：<https://play.qilang.org>
+- 装编译器：`curl -fsSL https://raw.githubusercontent.com/qilang-project/qi/main/scripts/install.sh | bash`
+- 第三方包：<https://pkg.qilang.org>
 
 ## License
 

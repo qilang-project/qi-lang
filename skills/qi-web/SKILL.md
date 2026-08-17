@@ -1,0 +1,455 @@
+---
+name: qi-web
+description: Build HTTP servers, web applications and real-time UIs in the Qi (奇语) programming language using the qi-web framework — an Express/Fiber-style router with middleware, route groups, path params ({名} syntax), request/response helpers, redirects, binary-safe file sending and static directories (sendfile), chunked streaming, SSE, sessions/signed cookies, Bearer auth, and a Rust-accelerated hot path (~122k RPS). Also covers LiveView-style server-rendered real-time pages (实时块路由带请求, DOM morph patching, structured slot diff, data-click/data-submit/data-change/data-patch bindings, data-hook + data-ignore for third-party JS, 实时异步/实时定时 server-push via per-connection mailboxes, live components, streams, uploads, forms). Use when the user writes Qi web servers, REST APIs, or real-time pages, or asks about 路由, 中间件, handlers, 请求解析, 响应, 发送文件, 静态目录, 会话, 认证, 重定向, LiveView, or 实时页面 in Qi. Requires the qi-lang skill for base language syntax.
+metadata:
+  author: qilang
+  version: "0.3"
+---
+
+# qi-web — Qi 语言 Web 框架
+
+用 Qi（奇语）写的 HTTP 框架，风格参考 Express / Go Fiber。热路径用 Rust 加速，实测 ~122k RPS（比 Express 快 5.5×）。
+
+> **先读 `qi-lang` 技能** 掌握基础语法（保留字地雷、`新建` 结构体字面量、FFI 约定等）。本技能只讲 qi-web 的 API。
+
+## 何时使用
+
+- 用户用 Qi 写 HTTP 服务器 / REST API / Web 应用
+- 用户问 qi-web 的路由、中间件、请求解析、响应、会话、认证、静态文件
+- 用户提到 `导入 Web`、`创建应用`、`运行应用`
+
+## 最小服务器
+
+```qi
+包 主程序;
+
+导入 Web::{应用, 上下文, 响应, 创建应用, 配置, 获取, 文本, 运行应用};
+
+函数 处理(上下文值: 上下文) : 响应 {
+    返回 文本("ok");
+}
+
+函数 入口() {
+    变量 应用值: 应用 = 创建应用();
+    应用值 = 配置(应用值, "127.0.0.1", 6790);   // 主机, 端口（用随机高位端口！）
+    应用值 = 获取(应用值, "/", 处理);
+    运行应用(应用值);
+}
+```
+
+**handler 签名固定**：`函数(上下文): 响应`。每个路由注册函数返回新的 `应用`，要回写：`应用值 = 获取(应用值, ...)`。
+
+对外服务把主机配成 `0.0.0.0`：`运行应用` / `运行应用_异步` / `运行应用_TLS` 都尊重 `配置` 里的主机（同步版曾硬编码 127.0.0.1，已修）。⚠️ 例外：`运行应用_HTTP2` 仍硬编码 127.0.0.1，暂不能对外绑定。
+
+## 路由
+
+| 函数 | HTTP 方法 |
+|---|---|
+| `获取(应用, 路径, 处理器)` | GET |
+| `提交(应用, 路径, 处理器)` | POST |
+| `整体更新(...)` | PUT |
+| `部分更新(...)` | PATCH |
+| `删除(...)` | DELETE |
+| `头(...)` | HEAD |
+| `请求选项(...)` | OPTIONS |
+| `首页(应用, 处理器)` | GET `/` 快捷方式 |
+
+**路径参数用花括号 `{名}`**（不是 `:名`！）：`/api/users/{id}`，handler 里 `路径参数(上下文值, "id")` 读取。
+
+### 路由组
+
+```qi
+变量 组 = 创建路由组("/api");
+应用值 = 组获取(应用值, 组, "/用户", 列出用户);      // → GET /api/用户
+应用值 = 组获取(应用值, 组, "/{id}", 用户详情);      // → GET /api/{id}
+应用值 = 组提交(应用值, 组, "/用户", 创建用户);      // → POST /api/用户
+```
+
+## 请求访问器（在 handler 里用）
+
+```qi
+变量 id: 字符串 = 路径参数(上下文值, "id");           // /users/{id}
+变量 编号: 整数 = 路径参数整数(上下文值, "id", 0);     // 带默认值
+变量 页: 整数 = 查询参数整数(上下文值, "page", 1);    // ?page=2
+变量 q: 字符串 = 查询参数(上下文值, "q");
+变量 头: 字符串 = 请求头(上下文值, "Authorization");
+变量 主体: 字符串 = 请求主体(上下文值);
+变量 方法: 字符串 = 请求方法(上下文值);
+变量 路径: 字符串 = 请求路径(上下文值);
+变量 字段: 字符串 = 表单字段(上下文值, "用户名");      // 表单解析
+// 内容协商 / 代理
+变量 是JSON: 整数 = 内容是(上下文值, "json");
+变量 接受类型: 字符串 = 优先接受(上下文值, "json,html");
+变量 真IP: 字符串 = 真实IP(上下文值);                  // 走 X-Forwarded-For
+```
+
+存在性检查：`存在路径参数` / `存在查询参数` / `存在请求头` / `存在表单字段`（返回 0/1）。
+
+## 响应助手
+
+```qi
+返回 文本("纯文本");
+返回 HTML("<h1>你好</h1>");
+返回 JSON("{\"ok\":true}");
+返回 重定向("/登录");                            // 302 + Location
+返回 发送文件("./public/index.html");           // 按扩展名自动 MIME（28 种）
+返回 下载文件("./report.pdf", "报告.pdf");        // Content-Disposition: attachment
+变量 响应值 = 设置响应头(文本("ok"), "X-Custom", "值");
+```
+
+✅ **二进制是安全的**（2026-08 起）：`发送文件` / `下载文件` / 静态中间件都不再走 UTF-8 字符串管道 ——
+它们只在响应头里放一个 `X-Qi-Sendfile` 标记，真实字节由 Rust 层 `std::fs::read` 直发，
+并透传 `Range` 头做 206 部分响应。实测 4104 字节 PNG 取回 md5 与原文件一致。
+**图片/字体/PDF/zip 直接发，不要再 base64 内联**（旧文档那条已作废）。
+
+## 静态目录
+
+```qi
+应用值 = 静态目录(应用值, "/static", "./public");   // (应用, URL前缀, 目录)
+```
+
+注册静态文件中间件。任意类型都能发（含二进制），带 MIME 推断 + `Cache-Control` + `Range`。
+
+⚠️ **目录必须是绝对路径**。给相对路径时「文件存在」那一关会过（它按进程 CWD 找），
+到 sendfile 才被拒（那层只认 `/` 或 `C:\` 开头），浏览器拿到
+`500 Internal Server Error: invalid sendfile path`，而文件明明就在那儿。
+
+```qi
+导入 标准库.操作系统 作为 系统;
+应用值 = 静态目录(应用值, "/static", 系统.当前目录() + "/public");
+```
+
+URL 路径也一律 ASCII —— 中文文件名要经百分号编码往返，不值得。
+
+## chunked 流式（双向支持）
+
+- **请求侧**：自动识别 `Transfer-Encoding: chunked` 并去分块（如 Caddy h2→h1 转发场景），业务无感。
+- **响应侧**（字节精确，可发二进制）：`流开始(客户端句柄, 状态码, 状态文本, 内容类型)` → 多次 `流发送块(句柄, 字节句柄)` / `流发送文本块(句柄, 文本)` → 发 0 块结束。见 `examples/流式响应.qi`。
+
+## SSE 事件流（事件流.qi）
+
+在 chunked 流式之上的 Server-Sent Events；只支持同步 `运行应用`（依赖 `ctx.客户端句柄`）。
+
+```qi
+SSE开始(上下文值)                          // 写 text/event-stream 头，返回 <0 失败
+SSE发送(上下文值, "message", 数据)          // event+data 帧；数据内换行自动拆多条 data:
+SSE发送数据(上下文值, 数据)                 // 无事件名（默认 message）
+SSE发送带ID(上下文值, 事件ID, 事件名, 数据)  // 带 id: 行
+SSE注释(上下文值, "keepalive")             // ": ..." 注释行，可作心跳
+SSE结束(上下文值)                          // chunked 终止块，之后框架关连接
+返回 SSE完成响应();                        // 状态码 0 = handler 已自行写完
+```
+
+EventSource 断连会自动重连重放——一次性流发 `done` 之类结束事件让前端 `es.close()`。LLM 流式聊天示例 `examples/llm_聊天_SSE.qi`（qi-harness `流式问` 的块回调里直接 `SSE发送`）。
+
+## 实时页面（实时页面.qi，LiveView 式）
+
+服务端状态 + WS 事件上行 + **DOM morph 局部 patch** 下行（焦点/光标/滚动天然保住）。必须同步 `运行应用`；路由路径用 ASCII。
+
+```qi
+// 三个用户函数：状态是 标准库.JSON 对象句柄
+函数 初始状态() : 整数                                  // J.创建对象() 建每连接状态
+函数 渲染(状态: 整数) : 字符串                           // 状态 → HTML 片段
+函数 处理事件(状态: 整数, 事件名: 字符串, 载荷JSON: 字符串) : 整数  // 返回新/同状态句柄
+
+应用值 = 实时路由_无鉴权(应用值, "/", 初始状态, 渲染, 处理事件);   // GET / + WS /ws，不校验登录态
+应用值 = 实时路由带准入(应用值, "/", 订阅载荷, 准入, 初始状态, 渲染, 处理事件);  // 按登录态放行
+转义HTML(文本)                                          // 渲染用户输入前防注入
+实时指令(状态, 指令_标题("…"));                          // 渲染帧之后下发；另有 指令_跳转/滚动/事件/提示
+```
+
+**真实应用几乎都用这一个**（把上面几条路合成一条：结构化 diff + 准入 + URL 参数 + 服务端消息）：
+
+```qi
+导入 Web::{实时块路由带请求};
+
+函数 订阅载荷(上下文值: 上下文) : 字符串      // 首屏 GET —— **唯一读得到 cookie 的地方**，
+                                              //   结果会被烤进页面再由客户端回传
+函数 准入(载荷JSON: 字符串) : 字符串          // 回空串 = 拒绝并断开
+函数 初始状态(身份: 字符串, 载荷JSON: 字符串) : 整数
+函数 渲染(状态: 整数) : HTML块
+函数 处理事件(状态: 整数, 事件名: 字符串, 载荷JSON: 字符串) : 整数   // 客户端来的
+函数 处理参数(状态: 整数, 路径: 字符串, 查询JSON: 字符串) : 整数     // 轻路由 data-patch
+函数 处理消息(状态: 整数, 消息名: 字符串, 载荷JSON: 字符串) : 整数   // 服务端自己来的
+
+应用值 = 实时块路由带请求(应用值, "/ask", 订阅载荷, 准入, 初始状态,
+    渲染, 处理事件, 处理参数, 处理消息);
+// 多一个 头部函数(状态): 字符串 的重载 —— 用来出这一页的 <title> / <meta> / <script src>
+```
+
+WS 路径是路由路径 + `/ws`。**路由路径必须 ASCII**（含中文会 panic）。
+
+### 客户端绑定速查
+
+| 属性 | 触发 |
+|---|---|
+| `data-click="事件名"` | 点击；`data-value-*` 自动并进载荷（`data-value-card-id` → `cardId`） |
+| `data-submit="事件名"` | 表单提交，整张表的 FormData 进载荷；提交后表单会 reset |
+| `data-change="事件名"` | 表单任一字段变化，**整张表**上行，默认防抖 200ms |
+| `data-input` / `data-keyup` | 单个输入框；`data-debounce` / `data-key-filter` |
+| `data-patch="?a=1"` | 轻路由，走 `处理参数`，不重建连接 |
+| `data-hook="名"` | 交给 JS 接管：`window.qiHooks.名 = {mounted, updated, destroyed}` |
+| `data-ignore` | **属性照常同步，子树不进** —— 第三方 JS 拥有这片 DOM 时用它 |
+| `data-js-click` / `data-js-keep` | 纯客户端动作 / class 与 style 归客户端管 |
+
+`data-hook` + `data-ignore` 是接第三方渲染库（图表、编辑器、地图）的标准配方：
+服务端只翻一个 `data-rev` 属性，hook 的 `updated` 就被叫到，子树始终归那个库。
+数据别放 hook 内部（被 ignore 挡住拿不到新值），放旁边一个隐藏 div 里。
+
+**HTML 属性名一律英文**（中文属性名对 CSS 选择器和 devtools 不友好）；事件名本身随意，中文没问题：
+`data-click` / `data-input`（+`data-debounce`）/ `data-keyup`（+`data-key-filter`、`data-clear-on-key`）/ `data-submit` / `data-confirm`；
+事件参数 `data-value-*`（**写 kebab**：`data-value-card-id` → 载荷键 `cardId`；写成 `data-value-cardId` 会被浏览器小写化而**静默失效**）；
+`data-key` morph 对齐键（必须是跟着数据走的稳定 id，用循环下标等于没 key）；`data-ignore` 跳过子树。
+断线指数退避重连（0.5s→8s），`<body>` 带 `qi-offline`，触发元素等待回帧期间带 `qi-loading`。示例 `examples/实时_计数器.qi`。
+
+渲染函数返回 `HTML块`（`HTML{…}` 模板）时用 `实时块路由_无鉴权`：同一模板的相邻两帧只发变化的**槽位**（结构化 diff），改一个数字几十字节。
+
+## 实时消息（实时消息.qi，服务端主动推）
+
+对标 `handle_info` + `Process.send_after` + `start_async`。用它的判据：**没人点也要动**（时钟/倒计时/进度）或**慢活儿**（问 AI 三秒，页面要先出「思考中…」）。多一个 `消息处理函数`，签名与 `事件处理函数` 一致。
+
+```qi
+应用值 = 实时路由带消息(应用值, "/clock", 初始状态, 渲染, 处理事件, 处理消息);
+// 另有 实时块路由带消息（块渲染）、实时WS路由带消息（页面外壳自己写）
+
+实时定时(状态, 1000, "滴答", "{}")             // 延迟投给自己；周期要**显式续拍**
+实时自投(状态, "下一步", "{}")                  // 立刻投给自己（把一件事拆成几拍）
+实时异步(状态, "回答", 闭包(): 字符串 { … })     // 后台跑，返回值当载荷投回来；调用后立刻返回
+异步错误(载荷JSON)                              // 任务抛异常时投的是错误信封，用它判
+```
+
+- `__上线__` 是保留消息名：连接建好、首帧发完后框架自动投一条 —— **开定时器 / 起后台任务要在这里**（`初始状态函数` 里还没有邮箱）。
+- `实时异步` 的闭包在另一个协程里跑，**不要碰状态句柄**；要用的值先在外面取出来捕获进去。
+- 邮箱随连接生灭，句柄单调递增永不复用 → 迟到的定时器安静丢弃，不会打进新连接。
+- 代价：这类连接每 100ms 醒一次查邮箱（不带消息的路由仍是纯阻塞）。
+- 跨连接推送不走这里，用 `实时广播.qi` 的 `频道广播`。示例 `examples/实时_时钟与异步.qi`。
+
+## 上传（上传.qi，进度 / 校验 / 取消）
+
+判据：要进度条、要能取消、要在传之前就知道大小/类型不对。文件跟着**已有的 WS** 走，切块送、边收边落盘，进度条就是状态 → HTML。
+
+```qi
+允许上传(状态, 上传设置("照片", "image/*", 4000000, 3, "上传目录"));   // mount 时
+HTML { <div data-upload-drop="照片">{上传输入(状态,"照片","选照片")}{上传进度(状态,"照片")}</div>
+       <button data-click="保存" 如果={上传空闲(状态,"照片")}>保存</button> }
+如果 (上传处理(状态, 事件名, 载荷JSON) == 1) { 返回 状态; }   // 事件处理开头
+上传完成表(状态, "照片")   // [{id,name,size,done,err,path}]
+清空上传(状态, "照片")     // 只清条目，**不删文件**
+```
+
+**安全要点**：服务端独立校验（客户端那道只是体验）；大小按**实际收到的字节**算（size 能谎报）；文件名清洗掉 `..`/分隔符，落盘名是「时间戳_编号_清洗名」，上传方决定不了写到哪；accept 的文件名和 MIME 都可伪造，只挡「选错文件」。
+
+**传输**：WS 文本帧 + base64（多 1/3），复用已鉴权连接。几十 MB 以上建议另开直传端点。示例 `examples/实时_上传.qi`。
+
+## 表单（表单.qi，校验 / 错误 / 保留输入）
+
+判据：任何有校验的表单。省掉的是「值还回去 + 错误挂对字段 + 校验逐条抄」三件重复劳动。
+
+```qi
+表 = 校验必填(表, "name", "请填名字");   表 = 校验最短(表, "pass", 6, "至少 6 位");
+表 = 校验相等(表, "pass", "pass2", "两次不一样");   // 错误挂在**第二个**字段
+表 = 校验匹配(表, "mail", 正则, "格式不对");        // 空值不报，交给必填
+表 = 校验整数范围(表, "age", 1, 120, "超范围");
+HTML { <form data-change="校验" data-submit="注册">{文本字段(表,"name","名字")}…</form> }
+存表单(状态, 校验(动过(表单载入(取表单(状态), 载荷JSON))));   // 事件处理里就这一行
+如果 (表单有错(表) == 0) { …提交… }
+```
+
+渲染：`文本/密码/邮箱/数字/多行字段(表, 字段, 标签)`（标签+输入框+错误一次给齐）、`错误块(表,字段)`。
+校验按**字符数**不是字节数；每字段只留第一条错。
+
+**两个必须知道的**：① 错误只在 `动过(表)` 之后才**渲染**（一进页面糊一脸红字很讨厌），但 `表单有错` 一直准。② 错误在 `表单载入` 时**清空**——错误是从值推出来的，不整套重算的话用户改对了红字还挂着。示例 `examples/实时_表单校验.qi`。
+
+## 轻路由（实时参数.qi，live_patch / handle_params）
+
+判据：标签页、筛选、翻页、详情面板 —— 要改 URL（收藏/分享/后退键）但不该重建连接。
+
+```qi
+应用值 = 实时块路由带参数(应用值, "/board", 初始状态, 渲染, 处理事件, 处理参数);
+函数 处理参数(状态: 整数, 路径: 字符串, 查询JSON: 字符串) : 整数 { … }   // 对标 handle_params
+取查询(查询JSON, "tab")   取查询整数(查询JSON, "page", 1)                // 值一律是字符串
+HTML { <a data-patch="?tab=x" href="?tab=x">x</a> }                    // href 一起写（右键新开/无 JS）
+实时指令(状态, 指令_跳转参数("?tab=x"))                                 // 服务端主动改 URL
+```
+
+`参数处理函数` 的触发点：首屏 GET（**服务端按真实 URL 直出，不会先渲默认值再跳**）、WS 连上报一次、点 data-patch、前进后退、服务端 push。
+
+**边界**：live_patch 不是 live_navigate —— 目标必须还是这个页面。换页面用 `指令_跳转`。路径可变（路由写 `/board/:id`）。示例 `examples/实时_轻路由.qi`。
+
+## 客户端动作（客户端动作.qi，JS commands）
+
+判据：纯视觉交互（展开折叠、闪一下、聚焦），服务端不需要知道。写进属性，客户端当场跑，0 往返。
+
+```qi
+变量 链: 动作 = 切类(新动作(), "#详情", "open");
+链 = 聚焦(链, "#搜索框");
+HTML { <button data-js-click={动作值(链)}>展开</button>
+       <div id="详情" data-js-keep>…</div> }
+```
+
+操作：`切换显隐/显示/隐藏(动作,选择器)`、`加类/去类/切类(动作,选择器,类名)`、`闪一下(动作,选择器,类名,毫秒)`、`设属性/删属性`、`聚焦/滚动到`、`派发事件(动作,选择器,事件名,载荷JSON)`；`动作值(动作)` 出属性值。**选择器留空 = 触发的那个元素**。同元素再写 `data-click` 就客户端服务端各做各的。服务端下发用 `实时指令(状态, 指令_动作(链))`。
+
+**⚠ 必须知道**：这些改的是 DOM，morph 会把 class/style 同步回服务端版本 —— 展开的菜单下一帧就合上（哪怕那帧跟它无关）。要存活就在元素上写 `data-js-keep`（morph 不再管它的 class/style，代价是服务端也改不动）。示例 `examples/实时_客户端动作.qi`。
+
+## 实时组件（实时组件.qi，LiveComponent）
+
+判据：页面的 `事件处理函数` 变成几十分支的 if 链、各部件状态键平铺在一起时。**「只重渲子树」不用组件也已经成立**（结构化 diff 自动做到），组件补的是**状态隔离 + 事件路由**。
+
+```qi
+函数 计数器() : 实时组件 { 返回 创建组件("counter", 初始, 渲染, 处理); }  // id 用 ASCII
+HTML { <div>{渲染组件(状态, 计数器())}</div> }        // 模板里插；自动套 <div data-target=id>
+如果 (组件事件(状态, 计数器(), 事件名, 载荷) == 1) { 返回 状态; }  // 处理事件开头先问
+组件状态(状态, 计数器())                              // 页面可**读**组件状态，别写
+```
+
+客户端上行时往上找最近的 `[data-target]` 放进载荷保留键 `__target__` → 页面和组件用**同名事件也不会串**。组件状态存在页面状态的 `__组件__<id>` 键下，按需建、随连接释放。同一份代码可开多个实例（不同 id），点其中一个另一个零字节。
+
+## 实时流（实时流.qi，Streams）
+
+判据：只增不改、能到几千条的列表（聊天/日志/通知）。服务端**不留列表**，只发增删；一条消息就发那一条，跟已有多少条无关。
+
+```qi
+// 容器必须 data-ignore，否则下次整页重渲会把流进去的项全抹掉
+HTML { <ul id="msgs" data-ignore></ul> }
+流追加(状态, "msgs", 键, HTML{ <li data-key={键}>…</li> })   // 键已存在=原地替换（即「更新某条」）
+流前插(状态, "msgs", 键, 块)     流删除(状态, "msgs", 键)     流清空(状态, "msgs")
+```
+
+键就是项的 `data-key`，必须是稳定 id。**列表项内部字段会随状态变**（每项有勾选框）就别用流，用 `对于={}` + 结构化 diff（那条路改一个字段只发一个槽位）。示例 `examples/实时_组件与流.qi`。
+
+## RPC（RPC.qi，Connect 协议 JSON 一元）
+
+Connect 协议 unary + JSON codec（connect-go/connect-es/buf curl 可直连）；**非 protobuf 线格式**，流式 RPC 属后续。服务名/方法名用 ASCII。
+
+```qi
+// 处理函数：收请求 JSON 串，回响应 JSON 串
+函数 说你好(上下文值: 上下文, 请求JSON: 字符串) : 字符串
+应用值 = 注册RPC(应用值, "greet.GreeterService", "SayHello", 说你好);
+// → POST /greet.GreeterService/SayHello (Content-Type: application/json)
+返回 RPC错误("invalid_argument", "说明");   // → 400 + {"code":…,"message":…}
+```
+
+错误码映射（Connect 规范子集）：invalid_argument/failed_precondition/out_of_range→400、unauthenticated→401、permission_denied→403、not_found→404、deadline_exceeded→408、already_exists/aborted→409、resource_exhausted→429、unimplemented→501、unavailable→503、其余→500。`application/proto` 请求回 415。示例 `examples/rpc_问候.qi`。
+
+## 指标（指标.qi，Prometheus / OpenTelemetry）
+
+一行挂上 `/metrics`。指标名按 OTel semconv（点换下划线），Prometheus 直接抓，
+OTel Collector 用 prometheus receiver 抓同一个口转 OTLP —— 一份输出喂两边。
+
+```qi
+导入 Web.指标::{挂指标};
+应用值 = 挂指标(应用值);               // 挂中间件 + /metrics
+应用值 = 挂指标于(应用值, "/_metrics");  // 换个路径
+```
+
+**业务指标**（计数器 / 量表 / 直方图，带标签）：
+
+```qi
+导入 Web.指标::{计数一, 计数加, 量表设, 量表加, 记录耗时,
+                指标说明, 注册指标带桶, 类_直方图, 桶组_慢, 标签, 标签二};
+
+指标说明("lessons_generated_total", "出好的课数，按成败分");
+计数一("lessons_generated_total", 标签二("kind","lesson","result","ok"));
+量表设("job_queue_depth", "", 队列长度(库));
+记录耗时("lesson_stage_duration_seconds", 标签("stage","text"), 耗时毫秒);
+```
+
+- **`记录耗时` 收毫秒，露出去是秒** —— 收毫秒是因为 `时间.现在毫秒()` 给的
+  就是毫秒，让调用点自己除 1000 迟早有人用整数除把 1234ms 变成 1 秒。
+- **桶组要选**：默认 `桶组_快`（5ms–10s，HTTP 时延）。LLM / TTS / 出图这类
+  几十秒起步的活儿必须 `注册指标带桶(名, 类_直方图(), 桶组_慢())`（1s–30min），
+  否则所有桶都是 0、全落进 `+Inf`，那张直方图除了总数什么都没告诉你。
+  桶组跟名字一起定死，**要在第一次记录之前调**。
+- 标签用 `标签()/标签二()/标签三()` 拼，它负责洗键名和转义值；
+  标签值只放**有限取值**的东西（阶段、成败、语言），别放用户输入或 ID。
+- 指标名不合法会被洗成合法的（非法字符→下划线）—— 一个坏名字会让**整份
+  输出解析失败**，那不是「少一条指标」是「监控全挂」。
+
+**从库里算的东西用收集器**，别在业务代码里定时刷 gauge —— 抓取周期是
+Prometheus 那边定的，自己定时要么太勤（白查库）要么太懒（数是陈的）：
+
+```qi
+加收集器(闭包() { 量表设("queue_depth", "", 查一下队列(库)); });
+```
+
+收集器在**处理 /metrics 的那条线**上同步跑，慢查询会直接变成抓取超时
+（Prometheus 默认 10 秒放弃），所以查库要自己带缓存。一个收集器抛异常
+只影响它自己，不会让整份输出没了。
+
+出这些：`http_server_request_duration_seconds`（histogram，11 桶）、
+`http_server_requests_total`、`http_server_active_requests`、
+`qi_web_uptime_seconds`、`qi_web_metric_series`、`qi_web_metric_overflow_total`。
+属性：`http_request_method` / `http_route` / `http_response_status_code`。
+
+- **标签用路由模板不用真实路径**（`/learn/{id}`，不是 `/learn/t660778cc`）——
+  否则一万个 id 就是一万条时间序列。模板由 `路由.路由模式(处理器索引)` 提供。
+- 计数器是**原子**的：并发 300 请求实测一条不丢。
+- 系列数封顶 512，撞顶并进 `route="__other__"`，并且 `qi_web_metric_overflow_total`
+  会涨 —— 悄悄丢指标比没有指标更坏。
+- 没匹配上任何路由的请求记成 `__unmatched__`。
+
+**默认关。** `/metrics` 里是整张路由表加流量分布，公网裸挂等于把系统结构
+和健康状况一起交出去。没设 `QI_METRICS_TOKEN` 就**连路由都不注册**（统计
+照常跑，配上重启就有）。
+
+```bash
+QI_METRICS_TOKEN=$(openssl rand -hex 24) ./你的应用
+curl -H "Authorization: Bearer $TOK" http://127.0.0.1:PORT/metrics
+QI_METRICS_TOKEN=public ./你的应用      # 内网确实不需要口令，要显式写
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: qi
+    authorization: { credentials_file: /etc/prometheus/qi.token }
+    static_configs: [{ targets: ['127.0.0.1:41862'] }]
+```
+
+- **只认 `Authorization: Bearer`，不收 `?t=`** —— 查询串会进 access log、
+  进反代日志、进浏览器历史，等于把口令抄好几份到处放。
+- 口令不对一律 **404 不是 401** —— 401 等于回答了「这儿确实有个 /metrics」。
+- 比对走 `定时安全等于`（逐字节比完再判，不提前返回）。
+
+## 中间件
+
+```qi
+应用值 = 使用日志(应用值);                  // 请求日志
+应用值 = 使用跨域(应用值);                  // CORS
+应用值 = 限制请求大小(应用值, 1048576);      // 最大请求体字节数
+// 自定义中间件签名：函数(下一个: 函数(上下文): 响应, 上下文): 响应
+应用值 = 使用中间件(应用值, 我的中间件);
+```
+
+## 会话 / Cookie / 认证
+
+`会话` 模块：
+- Cookie：`Cookie(上下文, 名)` 读、`设置Cookie(响应, 名, 值)`、`设置Cookie完整(...)`（path/max_age/secure/http_only/same_site）、`删除Cookie`
+- **签名 Cookie**（HMAC-SHA256 防篡改）：`设置签名Cookie(响应, 名, 值, 密钥)` / `读签名Cookie(上下文, 名, 密钥)`（校验失败返回 ""）
+- 服务端会话存储：`新会话ID()`（UUID）、`设置会话`/`会话标识`/`会话取值`/`会话设值`/`销毁会话`——**内存哈希表实现**，重启即失、多进程不共享
+
+`认证` 模块（只做解析与守卫，不含存储）：
+- `Bearer令牌(上下文)` 取 Authorization Bearer；`API密钥(上下文)` 取 X-API-Key；`认证标识(上下文)` 依次试 Bearer→API key→会话 Cookie
+- `需要认证(下一步, 上下文)` 守卫中间件；`未授权(消息)` 401 / `禁止访问(消息)` 403
+
+**生产级会话先例**（Bearer + SQLite，参考 aione 用户系统 `aione-spike/用户系统.qi`）：token 用 `Bearer令牌` 解析，会话存 `标准库.数据库`（SQLite）表（token/用户id/角色/过期），按过期时间清理、禁用用户即时失效，密码 `加密.SHA256哈希(盐 + 密码)`。别依赖内置内存会话存储做生产。
+
+## 端口约定
+
+⚠️ **示例和实际部署都用随机高位端口**（`3076` / `6759` / `43510`），不要用 8080 / 3000 / 8000。把主机/端口提取成变量，不要在多行重复硬编码。
+
+## 运行
+
+```bash
+qi run 服务器.qi          # 编译并启动
+# 压测
+wrk -t4 -c100 -d10s http://127.0.0.1:6790/
+```
+
+## 已知边界
+
+- handler 必须返回 `响应`，不能返回裸字符串
+- **路由 path 不要含中文**（会 panic），用 ASCII 路径
+- 跨包导入用 destructure：`导入 Web::{创建应用, 获取, 文本, ...}`，逐个列出要用的符号
+- 结构体字面量一律 `新建 类型{...}`（括号包裹写法已从语言删除，见 qi-lang 技能）
+- 静态目录必须给绝对路径（相对路径会在 sendfile 层 500），见上文「静态目录」

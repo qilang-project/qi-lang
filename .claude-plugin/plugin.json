@@ -1,0 +1,20 @@
+{
+  "name": "qilang",
+  "version": "2.1.0",
+  "description": "Skills for Qi (奇语): the language core, qi-web (HTTP + LiveView), qi-cli, and qi-harness (LLM agents).",
+  "author": {
+    "name": "qilang-project",
+    "url": "https://github.com/qilang-project"
+  },
+  "homepage": "https://qilang.org",
+  "repository": "https://github.com/qilang-project/qi-lang",
+  "license": "MIT",
+  "keywords": [
+    "qi",
+    "qilang",
+    "奇语",
+    "chinese-programming-language",
+    "llvm",
+    "skills"
+  ]
+}
